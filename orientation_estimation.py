@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import imu_simulator
+from imu_simulator import imuSimulator
 
 
 def quaternions_to_eulers_deg(quaternions_rad):
@@ -78,6 +78,72 @@ def plot_rmse(ground_truth, comp_filter, ekf, sampling_frequency):
     plt.show()
 
 
+def plot_rmse_new0(ground_truths, comp_filters, ekfs, sampling_frequency):
+    """Plot RMSE between ground truth and two estimates"""
+
+    n_runs = len(ground_truths)
+    n_samples = len(ground_truths[0])
+
+    fig, axs = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+
+    for axis in range(3):
+        rmse1 = np.zeros(n_samples)
+        rmse2 = np.zeros(n_samples)
+
+        for t in range(n_samples):
+            error1 = 0
+            error2 = 0
+            for run in range(n_runs):
+                error1 = (ground_truths[run][t, axis] - comp_filters[run][t, axis]) ** 2
+                error2 = (ground_truths[run][t, axis] - ekfs[run][t, axis]) ** 2
+
+            rmse1[t] = np.sqrt(error1 / n_runs)
+            rmse2[t] = np.sqrt(error2 / n_runs)
+
+        time = np.arange(n_samples) / sampling_frequency
+        axs[axis].plot(time, rmse1, label="Complementary Filter")
+        axs[axis].plot(time, rmse2, label="EKF")
+        axs[axis].set_title(["Roll", "Pitch", "Yaw"][axis])
+        axs[axis].set_ylabel("RMSE [deg]")
+        axs[axis].legend(loc="upper right")
+
+    axs[2].set_xlabel("Time [s]")
+    fig.suptitle("RMSE")
+    plt.show()
+
+
+def plot_rmse_new(ground_truths, comp_filters, ekfs, sampling_frequency):
+    """Plot RMSE between ground truth and two estimates"""
+
+    print(np.array(ground_truths))
+    n_runs, n_samples, _ = np.array(ground_truths).shape
+
+    fig, axs = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+    time = np.arange(n_samples) / sampling_frequency
+
+    for axis in range(3):
+        error1 = (
+            (np.array(ground_truths)[:, :, axis] - np.array(comp_filters)[:, :, axis])
+            ** 2
+        ).mean(axis=0)
+        error2 = (
+            (np.array(ground_truths)[:, :, axis] - np.array(ekfs)[:, :, axis]) ** 2
+        ).mean(axis=0)
+
+        rmse1 = np.sqrt(error1)
+        rmse2 = np.sqrt(error2)
+
+        axs[axis].plot(time, rmse1, label="Complementary Filter")
+        axs[axis].plot(time, rmse2, label="EKF")
+        axs[axis].set_title(["Roll", "Pitch", "Yaw"][axis])
+        axs[axis].set_ylabel("RMSE [deg]")
+        axs[axis].legend(loc="upper right")
+
+    axs[2].set_xlabel("Time [s]")
+    fig.suptitle("Mean RMSE for " + str(n_runs) + " runs")
+    plt.show()
+
+
 def plot_average_rmse(ground_truth_runs, comp_filter_runs, ekf_runs):
     """Plot average RMSE between ground truth and two estimates over multiple runs"""
 
@@ -85,8 +151,6 @@ def plot_average_rmse(ground_truth_runs, comp_filter_runs, ekf_runs):
 
     for i in range(3):
         for j in range(len(ground_truth_runs)):
-            # print("Ground Truth Shape:", ground_truth_runs[j][:, i].shape)
-            # print("EKF Runs Shape:", ekf_runs[j][:, i].shape)
             print("Ground Truth Shape:", ground_truth_runs[j].shape)
             print("EKF Runs Shape:", ekf_runs[j].shape)
 
@@ -152,7 +216,7 @@ def plot_individual_rmse(ground_truth_runs, comp_filter_runs, ekf_runs):
     plt.show()
 
 
-def run_comp_filter():
+def run_comp_filter(imu: imuSimulator):
     from ahrs.filters import Complementary
 
     complementary_filter = Complementary(
@@ -163,7 +227,6 @@ def run_comp_filter():
         gain=0.1,
     )
 
-    print("Complementary Filter")
     comp_filter_estimates = complementary_filter._compute_all()
 
     # comp_filter_estimates = []
@@ -187,10 +250,12 @@ def run_comp_filter():
     #     "Complementary Filter vs Ground Truth",
     # )
 
-    return quaternions_to_eulers_deg(comp_filter_estimates)
+    temp = quaternions_to_eulers_deg(comp_filter_estimates)
+    temp[:, 2] -= 90
+    return temp
 
 
-def run_ekf(sampling_frequency: int):
+def run_ekf(imu: imuSimulator):
     from ahrs.filters import EKF
     from ahrs.common.orientation import acc2q
 
@@ -217,14 +282,14 @@ def run_ekf(sampling_frequency: int):
     #     "EKF vs Ground Truth",
     # )
 
-    return quaternions_to_eulers_deg(Q)
+    temp = quaternions_to_eulers_deg(Q)
+    temp[:, 2] += 90
+    return temp
 
 
-def plot_models():
-    imu.run_sequence()
-
-    comp_euler = run_comp_filter()
-    comp_euler[:, 2] -= 90
+def plot_models(imu: imuSimulator):
+    comp_euler = run_comp_filter(imu)
+    # comp_euler[:, 2] -= 90
     # comp_euler[:, 2] = np.maximum(comp_euler[:, 2], -70)
 
     plot_euler_angles(
@@ -235,9 +300,10 @@ def plot_models():
         "Complementary Filter vs Ground Truth",
     )
 
-    ekf_euler = run_ekf(imu.sampling_frequency)
-    ekf_euler[:, 2] += 90
+    ekf_euler = run_ekf(imu)
+    # ekf_euler[:, 2] += 90
     # ekf_euler[:, 2] = np.minimum(ekf_euler[:, 2], 100)
+
     plot_euler_angles(
         imu.sampling_frequency,
         np.array(imu.ground_truth_deg),
@@ -246,36 +312,50 @@ def plot_models():
         "EKF vs Ground Truth",
     )
 
-    plot_rmse(
-        np.array(imu.ground_truth_deg), comp_euler, ekf_euler, imu.sampling_frequency
-    )
+    # plot_rmse(
+    #     np.array(imu.ground_truth_deg), comp_euler, ekf_euler, imu.sampling_frequency
+    # )
 
 
-def monte_carlo():
+def monte_carlo(imu: imuSimulator):
     # Number of Monte Carlo runs
-    num_runs = 2
+    num_runs = 20
 
-    # Lists to store results of each run
-    comp_q_runs = []
-    ekf_q_runs = []
+    comp_runs = []
+    ekf_runs = []
     ground_truth_runs = []
 
-    # imu = imu_simulator.imuSimulator(sampling_frequency=50)
     # Perform 20 Monte Carlo runs
     for run in range(num_runs):
-        imu.run_sequence()
+        # imu.dynamic_seq_1()
+        imu.dynamic_seq_2()
+        # imu.static_seq()
 
-        # Run your complementary filter and EKF models and store the results
-        comp_q_runs.append(run_comp_filter())
-        ekf_q_runs.append(run_ekf(imu.sampling_frequency))
+        comp_runs.append(run_comp_filter(imu))
+        ekf_runs.append(run_ekf(imu))
         ground_truth_runs.append(np.array(imu.ground_truth_deg))
 
-    # Now comp_q_runs, ekf_q_runs, and ground_truth_runs contain the results of your 20 runs.
-    # You can now use these to compute and plot the RMSE for each run.
-    # plot_rmse(ground_truth_runs, comp_q_runs, ekf_q_runs)
-    plot_average_rmse(ground_truth_runs, comp_q_runs, ekf_q_runs)
-    plot_individual_rmse(ground_truth_runs, comp_q_runs, ekf_q_runs)
+    plot_rmse_new(ground_truth_runs, comp_runs, ekf_runs, imu.sampling_frequency)
 
 
-imu = imu_simulator.imuSimulator(sampling_frequency=50)
-plot_models()
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
+# REMEBER TO CHANGE SEQUENCE IN MONTE CARLO #
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
+
+# print("Dynamic Sequence 1")
+# dyn_seq_1_imu = imuSimulator(sampling_frequency=50)
+# dyn_seq_1_imu.dynamic_seq_1()
+# plot_models(dyn_seq_1_imu)
+# monte_carlo(dyn_seq_1_imu)
+
+print("Dynamic Sequence 2")
+dyn_seq_2_imu = imuSimulator(sampling_frequency=50)
+dyn_seq_2_imu.dynamic_seq_2()
+plot_models(dyn_seq_2_imu)
+monte_carlo(dyn_seq_2_imu)
+
+# print("Static Sequence")
+# static_seq_imu = imuSimulator(sampling_frequency=50)
+# static_seq_imu.static_seq()
+# plot_models(static_seq_imu)
+# monte_carlo(static_seq_imu)
