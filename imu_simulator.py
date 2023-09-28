@@ -175,15 +175,18 @@ class imuSimulator:
     def get_mag(self):
         return self._convert_list_format(self.magnetometer_data)
 
+    def get_num_samples(self):
+        return self.total_time * self.sampling_frequency
+
     def run_sequence(self):
         self._move_to_orientation(roll_deg=0, pitch_deg=0, yaw_deg=0, period_sec=1)
         self._move_to_orientation(0, 70, 0, 5)
-        # self._move_to_orientation(0, -70, 0, 5)
-        # self._move_to_orientation(33, 0, 0, 6)
-        # self._move_to_orientation(-33, 0, 0, 6)
-        # self._move_to_orientation(0, 0, 95, 5)
-        # self._move_to_orientation(0, 0, -95, 5)
-        # self._move_to_orientation(0, 0, 0, 5)
+        self._move_to_orientation(0, -70, 0, 5)
+        self._move_to_orientation(33, 0, 0, 6)
+        self._move_to_orientation(-33, 0, 0, 6)
+        self._move_to_orientation(0, 0, 95, 5)
+        self._move_to_orientation(0, 0, -95, 5)
+        self._move_to_orientation(0, 0, 0, 5)
 
     def plot_imu_data(self):
         """
