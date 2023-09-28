@@ -6,6 +6,9 @@ class imuSimulator:
     sampling_frequency: int  # hz
     total_time: int = 0  # sec
 
+    B: float  # magnetic field strength
+    inclination: float  # inclination angle
+
     _roll_rad: float = 0
     _pitch_rad: float = 0
     _yaw_rad: float = 0
@@ -15,8 +18,8 @@ class imuSimulator:
     gyroscope_data = []  # rad/s
     magnetometer_data = []  # mT
 
-    def __init__(self, sampling_rate=50):
-        self.sampling_frequency = sampling_rate
+    def __init__(self, sampling_frequency=50):
+        self.sampling_frequency = sampling_frequency
 
     def _rad(self, deg):
         return deg * np.pi / 180
@@ -44,12 +47,29 @@ class imuSimulator:
                 [0, 0, 1],
             ]
 
+            # R_x = [
+            #     [1, 0, 0],
+            #     [0, np.cos(self._roll_rad), -np.sin(self._roll_rad)],
+            #     [0, np.sin(self._roll_rad), np.cos(self._roll_rad)],
+            # ]
+
+            # R_y = [
+            #     [np.cos(self._pitch_rad), 0, np.sin(self._pitch_rad)],
+            #     [0, 1, 0],
+            #     [-np.sin(self._pitch_rad), 0, np.cos(self._pitch_rad)],
+            # ]
+
+            # R_z = [
+            #     [np.cos(self._yaw_rad), -np.sin(self._yaw_rad), 0],
+            #     [np.sin(self._yaw_rad), np.cos(self._yaw_rad), 0],
+            #     [0, 0, 1],
+            # ]
+
             R_x_mat = np.matrix(R_x)
             R_y_mat = np.matrix(R_y)
             R_z_mat = np.matrix(R_z)
 
             R_xy = np.matmul(R_x_mat, R_y_mat)
-
             R_xyz = np.matmul(R_xy, R_z_mat)
 
             acc_ref_point = np.matrix([0, 0, -1]).transpose()
@@ -83,7 +103,7 @@ class imuSimulator:
                 np.array([self._rad(deg_data) for deg_data in new_data])
             )
 
-        def _calc_mag_delta():
+        def _calc_mag_delta_old():
             R_x = [
                 [1, 0, 0],
                 [0, np.cos(self._roll_rad), np.sin(self._roll_rad)],
@@ -100,21 +120,41 @@ class imuSimulator:
                 [0, 0, 1],
             ]
 
+            # R_x = [
+            #     [1, 0, 0],
+            #     [0, np.cos(self._roll_rad), -np.sin(self._roll_rad)],
+            #     [0, np.sin(self._roll_rad), np.cos(self._roll_rad)],
+            # ]
+
+            # R_y = [
+            #     [np.cos(self._pitch_rad), 0, np.sin(self._pitch_rad)],
+            #     [0, 1, 0],
+            #     [-np.sin(self._pitch_rad), 0, np.cos(self._pitch_rad)],
+            # ]
+
+            # R_z = [
+            #     [np.cos(self._yaw_rad), -np.sin(self._yaw_rad), 0],
+            #     [np.sin(self._yaw_rad), np.cos(self._yaw_rad), 0],
+            #     [0, 0, 1],
+            # ]
+
             R_x_mat = np.matrix(R_x)
             R_y_mat = np.matrix(R_y)
             R_z_mat = np.matrix(R_z)
 
             R_xy = np.matmul(R_x_mat, R_y_mat)
-
             R_xyz = np.matmul(R_xy, R_z_mat)
+
             B = 28310.9e-9
             # B = 28.3
-            inclination = 61.49
+            inclination = self._rad(61.49)
+            # inclination = np.pi / 2
+            # inclination = self._rad(80)
 
             mag_ref_point = (
                 B * np.matrix([np.cos(inclination), 0, np.sin(inclination)]).transpose()
             )
-            mag_orientation = -1 * np.matmul(R_xyz, mag_ref_point)
+            mag_orientation = -1e-6 * np.matmul(R_xyz, mag_ref_point)
 
             mag_bias = [0, 0, 0]
             new_data = [
@@ -122,16 +162,67 @@ class imuSimulator:
                 mag_orientation.tolist()[1][0] + mag_bias[1],
                 mag_orientation.tolist()[2][0] + mag_bias[2],
             ]
-            M_noise = 1e-6 * np.random.normal(0, 1, 3)
+            # M_noise = 1e-6 * np.random.normal(0, 0.01, 3)
+            M_noise = 1e-6 * np.random.normal(0, 0.1e-6, 3)
             new_data = new_data + M_noise
+            # new_data = np.multiply(1 / 1000, new_data)
+
+            self.magnetometer_data.append(new_data)
+            # self.magnetometer_data.append(np.array(new_data) * 1_000_000)
+
+        def _calc_mag_delta_new():
+            # Construct Rotation Matrices
+            R_x = np.array(
+                [
+                    [1, 0, 0],
+                    [0, np.cos(self._roll_rad), -np.sin(self._roll_rad)],
+                    [0, np.sin(self._roll_rad), np.cos(self._roll_rad)],
+                ]
+            )
+
+            R_y = np.array(
+                [
+                    [np.cos(self._pitch_rad), 0, np.sin(self._pitch_rad)],
+                    [0, 1, 0],
+                    [-np.sin(self._pitch_rad), 0, np.cos(self._pitch_rad)],
+                ]
+            )
+
+            R_z = np.array(
+                [
+                    [np.cos(self._yaw_rad), -np.sin(self._yaw_rad), 0],
+                    [np.sin(self._yaw_rad), np.cos(self._yaw_rad), 0],
+                    [0, 0, 1],
+                ]
+            )
+
+            # Combine Rotation Matrices
+            R = np.dot(np.dot(R_z, R_y), R_x)
+
+            # Define the reference magnetic field in the global coordinate system
+            mag_ref_point = self.B * np.array(
+                [np.cos(self.inclination), 0, np.sin(self.inclination)]
+            )
+
+            # Transform this reference field to the local coordinate system using the rotation matrix
+            mag_orientation = np.dot(R, mag_ref_point)
+
+            # Add noise and bias
+            mag_bias = [0, 0, 0]
+            M_noise = 1e-6 * np.random.normal(0, 1, 3)
+            new_data = mag_orientation + mag_bias + M_noise
+
             self.magnetometer_data.append(new_data)
 
-        def _update_true_orientation():
+        def _update_ground_truth():
             self.ground_truth_deg.append(
                 [
                     self._deg(self._roll_rad),
                     self._deg(self._pitch_rad),
                     self._deg(self._yaw_rad),
+                    # self._deg(-self._roll_rad),
+                    # self._deg(-self._pitch_rad),
+                    # self._deg(-self._yaw_rad),
                 ]
             )
 
@@ -147,8 +238,8 @@ class imuSimulator:
 
             _calc_acc_delta()
             _calc_gyro_delta(roll_step_rad, pitch_step_rad, yaw_step_rad)
-            _calc_mag_delta()
-            _update_true_orientation()
+            _calc_mag_delta_old()
+            _update_ground_truth()
 
     def _convert_list_format(self, input_array):
         if not isinstance(input_array, list):
@@ -179,13 +270,14 @@ class imuSimulator:
         return self.total_time * self.sampling_frequency
 
     def run_sequence(self):
-        self._move_to_orientation(roll_deg=0, pitch_deg=0, yaw_deg=0, period_sec=1)
+        self._move_to_orientation(roll_deg=0, pitch_deg=0, yaw_deg=0, period_sec=5)
         self._move_to_orientation(0, 70, 0, 5)
         self._move_to_orientation(0, -70, 0, 5)
         self._move_to_orientation(33, 0, 0, 6)
         self._move_to_orientation(-33, 0, 0, 6)
-        self._move_to_orientation(0, 0, 95, 5)
-        self._move_to_orientation(0, 0, -95, 5)
+        self._move_to_orientation(0, 0, 85, 5)
+        self._move_to_orientation(0, 0, -85, 5)
+        self._move_to_orientation(45, 32, 0, 5)
         self._move_to_orientation(0, 0, 0, 5)
 
     def plot_imu_data(self):
