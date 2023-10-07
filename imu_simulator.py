@@ -293,7 +293,8 @@ class imuSimulator:
 
     def static_seq(self):
         self.reset()
-        self._move_to_orientation(roll_deg=0, pitch_deg=0, yaw_deg=0, period_sec=30)
+        # self._move_to_orientation(roll_deg=0, pitch_deg=0, yaw_deg=0, period_sec=30)
+        self._move_to_orientation(roll_deg=0, pitch_deg=0, yaw_deg=0, period_sec=50)
 
     def dynamic_seq_1(self):
         self.reset()
