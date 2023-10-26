@@ -335,7 +335,7 @@ def plot_rmse_report(ground_truths, filter, filter_name: str, sampling_frequency
 
 
 def monte_carlo_report_comp():
-    num_runs = 20
+    num_runs = 5
 
     comp_runs = [[], [], []]
     ground_truth_runs = [[], [], []]
@@ -395,17 +395,17 @@ def monte_carlo_report_ekf():
 
 
 # monte_carlo_report_comp()
-monte_carlo_report_ekf()
+# monte_carlo_report_ekf()
 
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
 # REMEBER TO CHANGE SEQUENCE IN MONTE CARLO #
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
 
-print("Dynamic Sequence 1")
-dyn_seq_1_imu = imuSimulator(sampling_frequency=50)
-dyn_seq_1_imu.dynamic_seq_1()
+# print("Dynamic Sequence 1")
+# dyn_seq_1_imu = imuSimulator(sampling_frequency=50)
+# dyn_seq_1_imu.dynamic_seq_1()
 # plot_comp(dyn_seq_1_imu)
-plot_ekf(dyn_seq_1_imu)
+# plot_ekf(dyn_seq_1_imu)
 # plot_models(dyn_seq_1_imu)
 # monte_carlo(dyn_seq_1_imu)
 
