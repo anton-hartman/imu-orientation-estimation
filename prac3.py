@@ -1,4 +1,3 @@
-from turtle import st
 import numpy as np
 from ahrs.filters import Complementary
 import orientation_estimation as oe
@@ -7,6 +6,7 @@ from ahrs.filters import EKF
 from ahrs.common.orientation import acc2q
 import scipy.stats as stats
 from scipy.stats import ttest_1samp
+from tabulate import tabulate
 
 
 def plot_euler(
@@ -24,8 +24,8 @@ def plot_euler(
     fig, axs = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
 
     labels = ["Ground Truth", estimate_name]
-    ground_truth = ground_truth[:, drop:]
-    estimate = estimate[drop:]
+    # ground_truth = ground_truth[:, drop:]
+    # estimate = estimate[:, drop:]
 
     for i in range(3):
         time = np.arange(len(ground_truth[:, i])) / fs
@@ -127,8 +127,6 @@ def compute_comparison_metrics(comp_rmse, ekf_rmse, intervals):
         ekf_mean = np.mean(ekf_data_interval)
         ekf_std = np.std(ekf_data_interval)
 
-        # t_stat, p_value = stats.ttest_ind(comp_data_interval, ekf_data_interval, axis=0)
-
         mean_performance_differences = np.mean(
             comp_rmse[:, start:end] - ekf_rmse[:, start:end], axis=0
         )
@@ -146,7 +144,20 @@ def compute_comparison_metrics(comp_rmse, ekf_rmse, intervals):
                 "Fail to reject null hypothesis: No significant difference in performance."
             )
 
-        table_data.append((start, end, comp_mean, comp_std, t_stat, ekf_mean, ekf_std))
+        table_data.append(
+            (start / 100, end / 100, comp_mean, comp_std, t_stat, ekf_mean, ekf_std)
+        )
+    # Tabulate the results after all intervals have been processed
+    headers = [
+        "Start",
+        "End",
+        "Comp. Mean",
+        "Comp. Std. Dev.",
+        "Test Statistic",
+        "EKF Mean",
+        "EKF Std. Dev.",
+    ]
+    print(tabulate(table_data, headers=headers))
 
     return table_data
 
@@ -217,7 +228,7 @@ ground_truths = []
 comp_runs = []
 ekf_runs = []
 
-num_runs = 3
+num_runs = 10
 for i in range(0, num_runs):
     acc = np.load("Collected_Data/A_List_" + str(i + 1) + ".npy")
     gyr = np.load("Collected_Data/G_List_" + str(i + 1) + ".npy")
@@ -237,8 +248,8 @@ for i in range(0, num_runs):
     # plot_euler(100, ground_truth, ekf_res, "EKF", "EKF vs Ground Truth")
 
 
-# plot_rmse(np.array(ground_truths), np.array(comp_runs), "Complementary Filter", 100)
-# plot_rmse(np.array(ground_truths), np.array(ekf_runs), "EKF", 100)
+plot_rmse(np.array(ground_truths), np.array(comp_runs), "Complementary Filter", 100)
+plot_rmse(np.array(ground_truths), np.array(ekf_runs), "EKF", 100)
 
 
 comp_rmse = calculate_rmse(ground_truths, comp_runs)
@@ -248,7 +259,5 @@ print("ekf rmse: ", len(ekf_rmse))
 
 intervals = [(0, 10), (11, 13), (14, 20)]
 results = compute_comparison_metrics(comp_rmse, ekf_rmse, intervals)
-print("RESULTS:", results)
-
 
 print("Done")
