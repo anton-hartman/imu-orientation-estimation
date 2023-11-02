@@ -1,13 +1,12 @@
 import numpy as np
 from ahrs.filters import Complementary
-import orientation_estimation as oe
 import matplotlib.pyplot as plt
 from ahrs.filters import EKF
-from ahrs.common.orientation import acc2q
 import scipy.stats as stats
 from scipy.stats import ttest_1samp
 from tabulate import tabulate
 from ahrs import Quaternion
+import copy
 
 
 def plot_euler(
@@ -49,8 +48,6 @@ def plot_rmse(
     time = np.arange(n_samples) / sampling_frequency
     time = time[50:]
 
-    # seq_names = ["Static Sequence", "Dynamic Sequence 1", "Dynamic Sequence 2"]
-    # for seq in range(3):
     for axis in range(3):
         error = ((ground_truths[:, :, axis] - filter[:, :, axis]) ** 2).mean(axis=0)[
             50:
@@ -66,7 +63,6 @@ def plot_rmse(
 
     axs[2].set_xlabel("Time [s]")
     fig.suptitle("Mean RMSE of " + filter_name + " for " + str(n_runs) + " runs")
-    plt.show()
 
 
 def calculate_rmse(ground_truths, estimates):
@@ -163,12 +159,8 @@ def compute_comparison_metrics(comp_rmse, ekf_rmse, intervals):
 
 
 def comp_filter(acc, gyr, mag, ground_truth, fs):
-    # convert gyr from deg/s to rad/s
-    gyr = np.deg2rad(gyr)
-    # convert mag from uT to mT
-    mag = -mag * 1e-3
-    # convert acc from g to m/s^2
-    acc = acc * 9.81
+    acc *= 9.81
+    mag *= 1000
     complementary_filter = Complementary(
         gyr=gyr,
         acc=acc,
@@ -178,29 +170,18 @@ def comp_filter(acc, gyr, mag, ground_truth, fs):
     )
 
     comp_filter_estimates = complementary_filter._compute_all()
-    comp_euler = oe.quaternions_to_eulers_deg(comp_filter_estimates)
-    comp_euler[:, 0], comp_euler[:, 1] = -comp_euler[:, 1], -comp_euler[:, 0].copy()
-
-    # plot_euler(
-    #     fs,
-    #     ground_truth,
-    #     comp_euler,
-    #     "Complementary Filter",
-    #     "Complementary Filter vs Ground Truth"
-    # )
-
+    comp_euler = np.array(
+        [Quaternion(q).to_angles() * 180 / np.pi for q in comp_filter_estimates]
+    )
+    comp_euler[:, 0], comp_euler[:, 1] = comp_euler[:, 1], comp_euler[:, 0].copy()
+    comp_euler[:, 2] *= -1
+    comp_euler[:, 2] += 90
     return comp_euler
 
 
 def ekf(acc, gyr, mag, ground_truth, fs, num_samples):
-    # convert gyr from deg/s to rad/s
-    # gyr = -np.deg2rad(gyr)
-    # mag = -mag
-    # convert acc from g to m/s^2
-    # acc = -acc * 9.81
     acc *= 9.81
     mag *= 1000
-    # gyr = np.deg2rad(gyr)
 
     ekf = EKF(frequency=100, frame="NED", magnetic_ref=mag[0])
     Q = np.zeros((num_samples, 4))  # Allocate array for quaternions
@@ -215,37 +196,70 @@ def ekf(acc, gyr, mag, ground_truth, fs, num_samples):
         )
 
     ekf_euler = np.array([Quaternion(q).to_angles() * 180 / np.pi for q in Q])
-    # ekf_euler = oe.quaternions_to_eulers_deg(Q)
     ekf_euler[:, 0], ekf_euler[:, 1] = ekf_euler[:, 1], ekf_euler[:, 0].copy()
-    # ekf_euler[:, 0] *= -1
-    # ekf_euler[:, 0] += 5
-    # ekf_euler[:, 1] -= 160
-    # ekf_euler[:, 2] *= -1
+    ekf_euler[:, 2] *= -1
 
-    # plot_euler(fs, ground_truth, ekf_euler, "EKF", "EKF vs Ground Truth", drop=50)
     return ekf_euler
 
 
-def optimal_test(true_state, baseline_state, research_state):
-    actual = [QuaternionArray(q) for q in true_state]
-    baseline = [QuaternionArray(q) for q in baseline_state]
-    research = [QuaternionArray(q) for q in research_state]
-    actual = np.array([q.to_angles() * RAD2DEG for q in actual])
-    baseline = np.array([q.to_angles() * RAD2DEG for q in baseline])
-    research = np.array([q.to_angles() * RAD2DEG for q in research])
+# region
+# def optimal_test(true_state, baseline_state, research_state):
+#     actual = [QuaternionArray(q) for q in true_state]
+#     baseline = [QuaternionArray(q) for q in baseline_state]
+#     research = [QuaternionArray(q) for q in research_state]
+#     actual = np.array([q.to_angles() * RAD2DEG for q in actual])
+#     baseline = np.array([q.to_angles() * RAD2DEG for q in baseline])
+#     research = np.array([q.to_angles() * RAD2DEG for q in research])
 
-    error_baseline = (actual - baseline) ** 2
-    error_research = (actual - research) ** 2
+#     error_baseline = (actual - baseline) ** 2
+#     error_research = (actual - research) ** 2
 
-    C_baseline = np.mean(error_baseline, axis=1)
-    C_research = np.mean(error_research, axis=1)
+#     C_baseline = np.mean(error_baseline, axis=1)
+#     C_research = np.mean(error_research, axis=1)
 
-    delta_C = C_baseline - C_research
-    mu = np.mean(delta_C, axis=0)
-    std = np.std(delta_C, axis=0)
-    T = mu / std
+#     delta_C = C_baseline - C_research
+#     mu = np.mean(delta_C, axis=0)
+#     std = np.std(delta_C, axis=0)
+#     T = mu / std
 
-    return mu, std, T
+#     return mu, std, T
+# endregion
+
+
+def plot_sensor_readings(accs, gyrs, mags, num_runs):
+    # global acc, gyr, mag
+    Ts = 1 / 100
+    t = np.arange(0, len(acc) * Ts, Ts)
+
+    fig, axs = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+    for i in range(3):
+        # axs[i].plot(t, gyr[:, i])
+        for j in range(num_runs):
+            axs[i].plot(t, gyrs[j, :, i])
+        axs[i].set_title(["Gyro X", "Gyro Y", "Gyro Z"][i])
+        axs[i].set_ylabel("Angle [rad]")
+    axs[2].set_xlabel("Time [s]")
+    fig.suptitle("Gyroscope Readings")
+
+    fig, axs = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+    for i in range(3):
+        # axs[i].plot(t, acc[:, i])
+        for j in range(num_runs):
+            axs[i].plot(t, accs[j, :, i])
+        axs[i].set_title(["Acc X", "Acc Y", "Acc Z"][i])
+        axs[i].set_ylabel("Acceleration [g]")
+    axs[2].set_xlabel("Time [s]")
+    fig.suptitle("Accelerometer Readings")
+
+    fig, axs = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+    for i in range(3):
+        # axs[i].plot(t, mag[:, i])
+        for j in range(num_runs):
+            axs[i].plot(t, mags[j, :, i])
+        axs[i].set_title(["Mag X", "Mag Y", "Mag Z"][i])
+        axs[i].set_ylabel("Magnetic Field [uT]")
+    axs[2].set_xlabel("Time [s]")
+    fig.suptitle("Magnetometer Readings")
 
 
 print("Starting")
@@ -254,28 +268,60 @@ ground_truths = []
 comp_runs = []
 ekf_runs = []
 
-num_runs = 1
+accs = []
+gyrs = []
+mags = []
+
+num_runs = 2
+# folder_path = "Collected_Data_23Okt"
+folder_path = "Collected_Data"
 for i in range(0, num_runs):
-    acc = np.load("Collected_Data/A_List_" + str(i + 1) + ".npy")
-    gyr = np.load("Collected_Data/G_List_" + str(i + 1) + ".npy")
-    mag = np.load("Collected_Data/M_List_" + str(i + 1) + ".npy")
-    roll = np.load("Collected_Data/rollList_" + str(i + 1) + ".npy")
-    print("roll", roll)
-    pitch = np.load("Collected_Data/pitchList_" + str(i + 1) + ".npy")
-    print("pitch", pitch)
-    yaw = np.load("Collected_Data/yawList_" + str(i + 1) + ".npy")
-    print("yaw", yaw)
+    acc = np.load(folder_path + "/A_List_" + str(i + 1) + ".npy")
+    gyr = np.load(folder_path + "/G_List_" + str(i + 1) + ".npy")
+    mag = np.load(folder_path + "/M_List_" + str(i + 1) + ".npy") / 2
+    accs.append(acc)
+    gyrs.append(gyr)
+    mags.append(mag)
+
+    roll = np.load(folder_path + "/rollList_" + str(i + 1) + ".npy")
+    pitch = np.load(folder_path + "/pitchList_" + str(i + 1) + ".npy")
+    yaw = np.load(folder_path + "/yawList_" + str(i + 1) + ".npy")
+    # print("roll", roll)
+    # print("pitch", pitch)
+    # print("yaw", yaw)
 
     ground_truths.append(ground_truth := np.transpose(np.array((roll, pitch, yaw))))
-    comp_runs.append(comp_res := comp_filter(acc, gyr, mag, ground_truth, 100))
-    ekf_runs.append(ekf_res := ekf(acc, gyr, mag, ground_truth, 100, len(acc)))
+    comp_runs.append(
+        comp_res := comp_filter(
+            copy.deepcopy(acc),
+            copy.deepcopy(gyr),
+            copy.deepcopy(mag),
+            copy.deepcopy(ground_truth),
+            100,
+        )
+    )
+    ekf_runs.append(
+        ekf_res := ekf(
+            copy.deepcopy(acc),
+            copy.deepcopy(gyr),
+            copy.deepcopy(mag),
+            copy.deepcopy(ground_truth),
+            100,
+            len(acc),
+        )
+    )
 
-    # plot_euler(100, ground_truth, comp_res, "Comp", "Comp vs Ground Truth")
+    plot_euler(100, ground_truth, comp_res, "Comp", "Comp vs Ground Truth")
     plot_euler(100, ground_truth, ekf_res, "EKF", "EKF vs Ground Truth")
 
+accs = np.array(accs)
+gyrs = np.array(gyrs)
+mags = np.array(mags)
 
-# plot_rmse(np.array(ground_truths), np.array(comp_runs), "Complementary Filter", 100)
-# plot_rmse(np.array(ground_truths), np.array(ekf_runs), "EKF", 100)
+
+plot_sensor_readings(accs, gyrs, mags, num_runs)
+plot_rmse(np.array(ground_truths), np.array(comp_runs), "Complementary Filter", 100)
+plot_rmse(np.array(ground_truths), np.array(ekf_runs), "EKF", 100)
 
 
 # comp_rmse = calculate_rmse(ground_truths, comp_runs)
@@ -285,11 +331,6 @@ for i in range(0, num_runs):
 
 # intervals = [(0, 10), (11, 13), (14, 20)]
 # results = compute_comparison_metrics(comp_rmse, ekf_rmse, intervals)
-
-print(ground_truths)
-print(comp_runs)
-print(ekf_runs)
-
 
 plt.show()
 print("Done")
