@@ -1,0 +1,309 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import time
+from ahrs import Quaternion, DEG2RAD, RAD2DEG, QuaternionArray
+from ahrs.common.quaternion import slerp
+from ahrs import QuaternionArray
+from ahrs.filters import AngularRate, Complementary, EKF, Madgwick
+import ahrs
+
+
+fs = 50 # Sampling frequency
+# textFile = 'static_sequence.txt'
+# textFile = 'dynamic_sequence1.txt'
+textFile = 'dynamic_sequence2.txt'
+# textFile = 'multi_movements.txt'
+
+# IMU simulation
+#######################################################################
+
+# Natural values
+G = 9.81 # m/s^2
+MAG_FIELD_STRENGTH = 40  # μT (Earth's magnetic field strength)
+DEG_TO_RAD = np.pi / 180
+
+# Parameters
+Fs = 50 # Sampling freq (Hz)
+Ts = 1 / Fs # Sampling period (s)
+
+magnetic_field_world = np.array([9.207, -2.477, -13.812])
+
+# Sensor noise
+acc_x_noise = [ -0.0013000000000000025, np.sqrt(8.870532328788443e-07)] # bias, std
+acc_y_noise = [-0.0157, np.sqrt( 8.120552212894452e-07)] # bias, std
+acc_z_noise = [0.022850000000000037, np.sqrt(9.953609964086445e-07)] # bias, std
+
+
+gyro_x_noise = [0.017750000000000002, np.sqrt(1.808794646050863e-07)] # bias, std
+gyro_y_noise = [-0.01125, np.sqrt(1.4218865070558618e-07)] # bias, std
+gyro_z_noise = [-0.0062,  np.sqrt(9.462255166959345e-08)] # bias, std
+
+mag_x_noise = [0.1, np.sqrt(0.2307042450614686)] # bias, std
+mag_y_noise = [0.1, np.sqrt(0.2248067835949665)] # bias, std
+mag_z_noise = [0.08, np.sqrt(0.2749442606006313)] # bias, std
+
+
+# Variables
+Orientation = [0, 0, 0] # [roll, pitch, yaw] (degrees)
+
+#######################################################################
+
+#simulate IMU data
+def awgn(mean, std):
+    # return 0
+    return np.random.normal(mean, std)
+
+def get_gyro_reading(velocity):
+    gyro_x = velocity[0] + awgn(gyro_x_noise[0], gyro_x_noise[1])
+    gyro_y = velocity[1] + awgn(gyro_y_noise[0], gyro_y_noise[1])
+    gyro_z = velocity[2] + awgn(gyro_z_noise[0], gyro_z_noise[1])
+
+    return np.array([gyro_x, gyro_y, gyro_z])
+
+def get_acc_reading(orientation: Quaternion):
+    q = Quaternion(orientation.conj)
+    rotated_gravity = q.rotate([0.0, 0.0, 1])
+
+    acc_x = rotated_gravity[0] + awgn(acc_x_noise[0], acc_x_noise[1])
+    acc_y = rotated_gravity[1] + awgn(acc_y_noise[0], acc_y_noise[1])
+    acc_z = rotated_gravity[2] + awgn(acc_z_noise[0], acc_z_noise[1])
+
+    return np.array([acc_x, acc_y, acc_z])
+
+def get_mag_reading(orientation):
+    q = Quaternion(orientation.conj)
+    rotated_mag_field = q.rotate(magnetic_field_world)
+
+    mag_x = rotated_mag_field[0] + awgn(mag_x_noise[0], mag_x_noise[1])
+    mag_y = rotated_mag_field[1] + awgn(mag_y_noise[0], mag_y_noise[1])
+    mag_z = rotated_mag_field[2] + awgn(mag_z_noise[0], mag_z_noise[1])
+
+    return np.array([mag_x, mag_y, mag_z])
+
+def read_movement_data(filename):
+    rots = [Quaternion().to_array()]
+    times = []
+
+    with open(filename, "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            data = line.split(",")
+            pitch = float(data[0]) * DEG2RAD
+            roll = float(data[1]) * DEG2RAD
+            yaw = float(data[2]) * DEG2RAD
+            time = float(data[3])
+
+            pitchStep = pitch / (time * Fs)
+            rollStep = roll / (time * Fs)
+            yawStep = yaw / (time * Fs)
+
+            q = Quaternion().from_angles([rollStep, pitchStep, yawStep])
+
+            for i in range(int(time * Fs)):
+                new_q = Quaternion(rots[-1]) * q
+                rots.append(new_q)
+
+        rots = [Quaternion(q) for q in rots]
+        return rots
+
+def determine_sensor_magnitudes_for_samples(rotations):
+    gyro_readings = np.empty((0, 3))
+    acc_readings = np.empty((0, 3))
+    mag_readings = np.empty((0, 3))
+
+    for i in range(len(rotations)):
+        if i == 0:
+            gyro_reading = np.array([0, 0, 0])
+        else:
+            q = Quaternion(rotations[i - 1])
+
+            vel = angular_velocities(q, Quaternion(rotations[i]), Ts)
+            gyro_reading = get_gyro_reading(vel)
+
+        acc_reading = get_acc_reading(rotations[i])
+        mag_reading = get_mag_reading(rotations[i])
+
+        gyro_readings = np.vstack((gyro_readings, gyro_reading))
+        acc_readings = np.vstack((acc_readings, acc_reading))
+        mag_readings = np.vstack((mag_readings, mag_reading))
+
+    return gyro_readings, acc_readings, mag_readings
+
+def angular_velocities(q1, q2, dt):
+    # Relative quaternion from q1 to q2
+    c = Quaternion(q1.conj)
+    q_rel = q2 * c
+
+    # Convert to axis-angle representation
+    q_rel = Quaternion(q_rel)
+    axis, angle = q_rel.to_axang()
+
+    # Compute angular velocity
+    world = (angle / dt) * axis
+    body = c.rotate(world)
+
+    return body
+
+def minusBias(A, G, M):
+    newA = []
+    newG = []
+    newM = []
+    for i in range(len(A)):
+        newA.append(np.array([A[i][0] - (acc_x_noise[0]), A[i][1] - (acc_y_noise[0]), A[i][2] - (acc_z_noise[0])]))
+        newG.append(np.array([G[i][0] - (gyro_x_noise[0]), G[i][1] - (gyro_y_noise[0]), G[i][2] - (gyro_z_noise[0])]))
+        newM.append(np.array([M[i][0] - (mag_x_noise[0]), M[i][1] - (mag_y_noise[0]), M[i][2] - (mag_z_noise[0])]))
+    return np.array(newA), np.array(newG), np.array(newM)
+  
+
+#######################################################################
+# filter data
+def complementary_filter(acc_data, gyr_data, mag_data):
+    C = Complementary(
+        frequency=Fs,
+        gain=0.9,
+    )
+    n = len(gyr_data)
+    estimated_state = np.empty((0, 4))
+    
+    for i in range(n):
+        if i == 0:
+            q = Quaternion()
+        else:
+            q = C.update(estimated_state[i-1], gyr_data[i], acc_data[i] * 9.81, mag_data[i] / 1000)
+            ang = Quaternion(q).to_angles() * RAD2DEG
+            ang[2] = ang[2] + 65
+            q = Quaternion().from_angles(ang * DEG2RAD)
+            q = Quaternion(q)
+
+        estimated_state = np.vstack((estimated_state, q.to_array()))
+
+    estimated_state = [Quaternion(q) for q in estimated_state]
+    return estimated_state
+
+def kalman_filter1(acc_data, gyr_data, mag_data):
+    E = EKF(
+    frequency=50,
+    magnetic_ref=np.array([9.207, -2.477, -13.812]),
+    )
+    n = len(gyr_data)
+    estimated_state = np.empty((0, 4))
+    
+    for i in range(n):
+        if i == 0:
+            q = Quaternion()
+        else:
+            q = E.update(estimated_state[i-1], gyr_data[i], acc_data[i] * 9.81, mag_data[i] * 1000)
+            # q[1] = -q[1]  # Negate Qx (pitch)
+            # q[2] = -q[2]  # Negate Qy (yaw)
+            # magnitude = np.linalg.norm(q)
+            # if magnitude != 0:
+            #     q = q / magnitude
+            # else:
+            #     q = Quaternion()
+            q = Quaternion(q)
+
+        estimated_state = np.vstack((estimated_state, q.to_array()))
+
+    estimated_state = [Quaternion(q) for q in estimated_state]
+    return estimated_state
+
+
+#######################################################################
+# plotting
+
+def plot_meausurements(estimate, truth):
+    tf = textFile
+    plt.figure(figsize=(10, 8))
+  
+    roll = estimate[:, 0] 
+    pitch = estimate[:, 1] 
+    yaw = estimate[:, 2] 
+
+    # Accelerometer subplot
+    plt.subplot(311)  # 3 rows, 1 column, 1st subplot
+    plt.subplot(311).set_ylabel( 'Angle(degrees)' )
+    plt.plot(roll, 'r', label='Estimate')
+    plt.plot(truth[:, 0], 'r--', label='Actual')
+    plt.title('Roll')
+    # plt.ylim(-180, 180)
+    plt.xlabel('Time Steps (0.02s)')
+    plt.legend()
+
+    # Gyroscope subplot
+    plt.subplot(312)  # 3 rows, 1 column, 2nd subplot
+    plt.subplot(312).set_ylabel( 'Angle(degrees)' )
+    plt.plot(pitch, 'b', label='Estimate')
+    plt.plot(truth[:, 1], 'b--', label='Actual')
+    plt.title('Pitch')
+    # plt.ylim(-180, 180)
+    plt.xlabel('Time Steps (0.02s)')
+    plt.legend()
+
+    # Magnetometer subplot
+    plt.subplot(313)  # 3 rows, 1 column, 3rd subplot
+    plt.subplot(313).set_ylabel( 'Angle(degrees)' )
+    plt.plot(yaw, 'g', label='Estimate')
+    plt.plot(truth[:, 2], 'g--', label='Actual')
+    plt.title('Yaw')
+    # plt.ylim(-180, 180)
+    plt.xlabel('Time Steps (0.02s)')
+    plt.legend()
+
+
+    
+    plt.tight_layout()  # Ensure proper layout
+    plt.show()
+
+def ideal_measurements(tfile):
+    tempRoll = []
+    tempPitch = []
+    tempYaw = []
+    
+    # Open the text file for reading
+    with open(tfile, 'r') as tf:
+        # Loop through each line in the file
+        for line in tf:
+            # Split the line into a list of values using ',' as the delimiter
+            values = line.strip().split(',')
+            # numSamples = freq * int(values[1])
+
+            if len(tempRoll) == 0:
+                tempR = 0
+                tempP = 0
+                tempY = 0
+            else:
+                tempR = tempRoll[-1]
+                tempP = tempPitch[-1]
+                tempY = tempYaw[-1]
+
+            for i in range(int(values[3])*fs):
+                tempP = tempP + float(values[0]) / (float(values[3])*fs)
+                tempR = tempR + float(values[1]) / (float(values[3])*fs)
+                tempY = tempY + float(values[2]) / (float(values[3])*fs)
+                tempRoll.append(tempR)
+                tempPitch.append(tempP)
+                tempYaw.append(tempY)
+
+    print(len(tempRoll))
+    return tempRoll, tempPitch, tempYaw
+
+#######################################################################
+orientation_state = read_movement_data(textFile)
+
+gyro_readings, acc_readings, mag_readings = determine_sensor_magnitudes_for_samples(
+    orientation_state
+)
+
+orientation_ang = np.array([q.to_angles() * RAD2DEG for q in orientation_state])
+acc, gyr, mag = minusBias(acc_readings, gyro_readings, mag_readings)
+
+estimates = kalman_filter1(acc, gyr, mag)
+kalman_ang = np.array([q.to_angles() * RAD2DEG for q in estimates])
+# kalman_ang[:, 1] = kalman_ang[:, 1] *-1
+# kalman_ang[:, 2] = kalman_ang[:, 2] *-1
+
+comp = complementary_filter(acc, gyr, mag)
+comp_ang = np.array([q.to_angles() * RAD2DEG for q in comp])
+
+plot_meausurements(comp_ang, orientation_ang)
+plot_meausurements(kalman_ang, orientation_ang)

@@ -7,6 +7,7 @@ from ahrs.common.orientation import acc2q
 import scipy.stats as stats
 from scipy.stats import ttest_1samp
 from tabulate import tabulate
+from ahrs import Quaternion
 
 
 def plot_euler(
@@ -38,7 +39,6 @@ def plot_euler(
     axs[2].set_xlabel("Time [s]")
 
     fig.suptitle(title)
-    plt.show()
 
 
 def plot_rmse(
@@ -194,14 +194,17 @@ def comp_filter(acc, gyr, mag, ground_truth, fs):
 
 def ekf(acc, gyr, mag, ground_truth, fs, num_samples):
     # convert gyr from deg/s to rad/s
-    gyr = -np.deg2rad(gyr)
-    mag = -mag
+    # gyr = -np.deg2rad(gyr)
+    # mag = -mag
     # convert acc from g to m/s^2
-    acc = -acc * 9.81
+    # acc = -acc * 9.81
+    acc *= 9.81
+    mag *= 1000
+    # gyr = np.deg2rad(gyr)
 
-    ekf = EKF(frequency=100, frame="ENU")
+    ekf = EKF(frequency=100, frame="NED", magnetic_ref=mag[0])
     Q = np.zeros((num_samples, 4))  # Allocate array for quaternions
-    Q[0] = acc2q(np.array([0, 0, 0]))
+    Q[0] = Quaternion()
 
     for t in range(1, num_samples):
         Q[t] = ekf.update(
@@ -211,15 +214,38 @@ def ekf(acc, gyr, mag, ground_truth, fs, num_samples):
             mag[t],
         )
 
-    ekf_euler = oe.quaternions_to_eulers_deg(Q)
+    ekf_euler = np.array([Quaternion(q).to_angles() * 180 / np.pi for q in Q])
+    # ekf_euler = oe.quaternions_to_eulers_deg(Q)
     ekf_euler[:, 0], ekf_euler[:, 1] = ekf_euler[:, 1], ekf_euler[:, 0].copy()
-    ekf_euler[:, 0] *= -1
-    ekf_euler[:, 0] += 5
-    ekf_euler[:, 1] -= 160
-    ekf_euler[:, 2] *= -1
+    # ekf_euler[:, 0] *= -1
+    # ekf_euler[:, 0] += 5
+    # ekf_euler[:, 1] -= 160
+    # ekf_euler[:, 2] *= -1
 
     # plot_euler(fs, ground_truth, ekf_euler, "EKF", "EKF vs Ground Truth", drop=50)
     return ekf_euler
+
+
+def optimal_test(true_state, baseline_state, research_state):
+    actual = [QuaternionArray(q) for q in true_state]
+    baseline = [QuaternionArray(q) for q in baseline_state]
+    research = [QuaternionArray(q) for q in research_state]
+    actual = np.array([q.to_angles() * RAD2DEG for q in actual])
+    baseline = np.array([q.to_angles() * RAD2DEG for q in baseline])
+    research = np.array([q.to_angles() * RAD2DEG for q in research])
+
+    error_baseline = (actual - baseline) ** 2
+    error_research = (actual - research) ** 2
+
+    C_baseline = np.mean(error_baseline, axis=1)
+    C_research = np.mean(error_research, axis=1)
+
+    delta_C = C_baseline - C_research
+    mu = np.mean(delta_C, axis=0)
+    std = np.std(delta_C, axis=0)
+    T = mu / std
+
+    return mu, std, T
 
 
 print("Starting")
@@ -228,7 +254,7 @@ ground_truths = []
 comp_runs = []
 ekf_runs = []
 
-num_runs = 10
+num_runs = 1
 for i in range(0, num_runs):
     acc = np.load("Collected_Data/A_List_" + str(i + 1) + ".npy")
     gyr = np.load("Collected_Data/G_List_" + str(i + 1) + ".npy")
@@ -245,19 +271,25 @@ for i in range(0, num_runs):
     ekf_runs.append(ekf_res := ekf(acc, gyr, mag, ground_truth, 100, len(acc)))
 
     # plot_euler(100, ground_truth, comp_res, "Comp", "Comp vs Ground Truth")
-    # plot_euler(100, ground_truth, ekf_res, "EKF", "EKF vs Ground Truth")
+    plot_euler(100, ground_truth, ekf_res, "EKF", "EKF vs Ground Truth")
 
 
-plot_rmse(np.array(ground_truths), np.array(comp_runs), "Complementary Filter", 100)
-plot_rmse(np.array(ground_truths), np.array(ekf_runs), "EKF", 100)
+# plot_rmse(np.array(ground_truths), np.array(comp_runs), "Complementary Filter", 100)
+# plot_rmse(np.array(ground_truths), np.array(ekf_runs), "EKF", 100)
 
 
-comp_rmse = calculate_rmse(ground_truths, comp_runs)
-print("comp rmse: ", comp_rmse)
-ekf_rmse = calculate_rmse(ground_truths, ekf_runs)
-print("ekf rmse: ", len(ekf_rmse))
+# comp_rmse = calculate_rmse(ground_truths, comp_runs)
+# print("comp rmse: ", comp_rmse)
+# ekf_rmse = calculate_rmse(ground_truths, ekf_runs)
+# print("ekf rmse: ", len(ekf_rmse))
 
-intervals = [(0, 10), (11, 13), (14, 20)]
-results = compute_comparison_metrics(comp_rmse, ekf_rmse, intervals)
+# intervals = [(0, 10), (11, 13), (14, 20)]
+# results = compute_comparison_metrics(comp_rmse, ekf_rmse, intervals)
 
+print(ground_truths)
+print(comp_runs)
+print(ekf_runs)
+
+
+plt.show()
 print("Done")
