@@ -6,7 +6,9 @@ import scipy.stats as stats
 from scipy.stats import ttest_1samp
 from tabulate import tabulate
 from ahrs import Quaternion
+from ahrs import Quaternion, DEG2RAD, RAD2DEG, QuaternionArray
 import copy
+from prettytable import PrettyTable
 
 
 def plot_euler(
@@ -40,29 +42,26 @@ def plot_euler(
     fig.suptitle(title)
 
 
-def plot_rmse(
-    ground_truths: np.ndarray, filter: np.ndarray, filter_name: str, sampling_frequency
-):
+def plot_rmse(ground_truths: np.ndarray, filter: np.ndarray, sampling_frequency):
     n_runs, n_samples, _ = ground_truths.shape
     fig, axs = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
     time = np.arange(n_samples) / sampling_frequency
     time = time[50:]
 
+    names = ["Complementary Filter", "EKF"]
     for axis in range(3):
-        error = ((ground_truths[:, :, axis] - filter[:, :, axis]) ** 2).mean(axis=0)[
-            50:
-        ]
-
-        rmse = np.sqrt(error)
-
-        axs[axis].plot(time, rmse, label="RMSE")
+        for j in range(2):
+            error = ((ground_truths[:, :, axis] - filter[j, :, :, axis]) ** 2).mean(
+                axis=0
+            )[50:]
+            rmse = np.sqrt(error)
+            axs[axis].plot(time, rmse, label=names[j])
         axs[axis].set_title(["Roll", "Pitch", "Yaw"][axis])
         axs[axis].set_ylabel("RMSE [deg]")
         axs[axis].legend()
-        # axs[axis].set_ylim([0, 6])
 
     axs[2].set_xlabel("Time [s]")
-    fig.suptitle("Mean RMSE of " + filter_name + " for " + str(n_runs) + " runs")
+    fig.suptitle("Mean RMSE of Complementary vs EKF for " + str(n_runs) + " runs")
 
 
 def calculate_rmse(ground_truths, estimates):
@@ -202,28 +201,73 @@ def ekf(acc, gyr, mag, ground_truth, fs, num_samples):
     return ekf_euler
 
 
-# region
 # def optimal_test(true_state, baseline_state, research_state):
-#     actual = [QuaternionArray(q) for q in true_state]
-#     baseline = [QuaternionArray(q) for q in baseline_state]
-#     research = [QuaternionArray(q) for q in research_state]
-#     actual = np.array([q.to_angles() * RAD2DEG for q in actual])
-#     baseline = np.array([q.to_angles() * RAD2DEG for q in baseline])
-#     research = np.array([q.to_angles() * RAD2DEG for q in research])
+# actual = [QuaternionArray(q) for q in true_state]
+# baseline = [QuaternionArray(q) for q in baseline_state]
+# research = [QuaternionArray(q) for q in research_state]
+# actual = np.array([q.to_angles() * RAD2DEG for q in actual])
+# baseline = np.array([q.to_angles() * RAD2DEG for q in baseline])
+# research = np.array([q.to_angles() * RAD2DEG for q in research])
 
-#     error_baseline = (actual - baseline) ** 2
-#     error_research = (actual - research) ** 2
 
-#     C_baseline = np.mean(error_baseline, axis=1)
-#     C_research = np.mean(error_research, axis=1)
+def optimal_test(actual, baseline, research):
+    square_error_baseline = (actual - baseline) ** 2
+    squared_error_research = (actual - research) ** 2
 
-#     delta_C = C_baseline - C_research
-#     mu = np.mean(delta_C, axis=0)
-#     std = np.std(delta_C, axis=0)
-#     T = mu / std
+    mse_baseline = np.mean(square_error_baseline, axis=1)
+    mse_research = np.mean(squared_error_research, axis=1)
 
-#     return mu, std, T
-# endregion
+    delta_mse = mse_baseline - mse_research
+    mu = np.mean(delta_mse, axis=0)
+    std = np.std(delta_mse, axis=0)
+    test = mu / std
+
+    return mu, std, test
+
+
+def show_optimal_test_table(intervals, ground_truths, comp_runs, ekf_runs):
+    results = []
+    Fs = 100
+    for interval in intervals:
+        true_state = ground_truths[:, interval[0] * Fs : interval[1] * Fs]
+        baseline_state = comp_runs[:, interval[0] * Fs : interval[1] * Fs]
+        research_state = ekf_runs[:, interval[0] * Fs : interval[1] * Fs]
+        result = optimal_test(true_state, baseline_state, research_state)
+        results.append(result)
+
+    print_manual_table(intervals, results)
+
+
+def print_manual_table(intervals, results):
+    # Calculate the max width for the 'Time Interval' column based on the longest interval string
+    interval_col_width = max(len(str(interval)) for interval in intervals) + 2
+
+    # Headers for the table
+    main_headers = ["Pitch", "Roll", "Yaw"]
+    sub_headers = ["Mean", "Std", "Mean/Std"]
+
+    # Create the header row
+    header_row = f"{'Time Interval':<{interval_col_width}} " + " ".join(
+        f"{h:<10} {h:<10} {h:<10}" for h in main_headers
+    )
+    sub_header_row = " " * interval_col_width + " ".join(
+        f"{sub:<10}" for sub in sub_headers * len(main_headers)
+    )
+
+    # Print the header rows
+    print(header_row)
+    print(sub_header_row)
+    print("-" * len(header_row))
+
+    # Print the data rows
+    for interval, result in zip(intervals, results):
+        # Format the data into strings
+        row_data = [
+            f"{value[0]:<+10.2f} {value[1]:<+10.2f} {value[2]:<+10.2f}"
+            for value in result
+        ]
+        data_row = f"{str(interval):<{interval_col_width}} " + " ".join(row_data)
+        print(data_row)
 
 
 def plot_sensor_readings(accs, gyrs, mags, num_runs):
@@ -272,7 +316,7 @@ accs = []
 gyrs = []
 mags = []
 
-num_runs = 2
+num_runs = 3
 # folder_path = "Collected_Data_23Okt"
 folder_path = "Collected_Data"
 for i in range(0, num_runs):
@@ -286,9 +330,6 @@ for i in range(0, num_runs):
     roll = np.load(folder_path + "/rollList_" + str(i + 1) + ".npy")
     pitch = np.load(folder_path + "/pitchList_" + str(i + 1) + ".npy")
     yaw = np.load(folder_path + "/yawList_" + str(i + 1) + ".npy")
-    # print("roll", roll)
-    # print("pitch", pitch)
-    # print("yaw", yaw)
 
     ground_truths.append(ground_truth := np.transpose(np.array((roll, pitch, yaw))))
     comp_runs.append(
@@ -311,26 +352,25 @@ for i in range(0, num_runs):
         )
     )
 
-    plot_euler(100, ground_truth, comp_res, "Comp", "Comp vs Ground Truth")
-    plot_euler(100, ground_truth, ekf_res, "EKF", "EKF vs Ground Truth")
+    # plot_euler(100, ground_truth, comp_res, "Comp", "Comp vs Ground Truth")
+    # plot_euler(100, ground_truth, ekf_res, "EKF", "EKF vs Ground Truth")
 
 accs = np.array(accs)
 gyrs = np.array(gyrs)
 mags = np.array(mags)
 
-
 plot_sensor_readings(accs, gyrs, mags, num_runs)
-plot_rmse(np.array(ground_truths), np.array(comp_runs), "Complementary Filter", 100)
-plot_rmse(np.array(ground_truths), np.array(ekf_runs), "EKF", 100)
+filters = np.array([ekf_runs, comp_runs])
+plot_rmse(np.array(ground_truths), filters, 100)
 
+ground_truths = np.array(ground_truths)
+comp_runs = np.array(comp_runs)
+ekf_runs = np.array(ekf_runs)
 
-# comp_rmse = calculate_rmse(ground_truths, comp_runs)
-# print("comp rmse: ", comp_rmse)
-# ekf_rmse = calculate_rmse(ground_truths, ekf_runs)
-# print("ekf rmse: ", len(ekf_rmse))
-
-# intervals = [(0, 10), (11, 13), (14, 20)]
-# results = compute_comparison_metrics(comp_rmse, ekf_rmse, intervals)
+intervals = [(0, 10), (11, 13), (14, 20)]
+intervals = [(0, 6), (6, 12), (12, 18)]
+intervals = [(10, 11), (15, 16)]
+show_optimal_test_table(intervals, ground_truths, comp_runs, ekf_runs)
 
 plt.show()
 print("Done")
