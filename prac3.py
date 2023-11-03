@@ -246,7 +246,7 @@ accs = []
 gyrs = []
 mags = []
 
-num_runs = 16
+num_runs = 11
 folder_path = "Collected_Data"
 for i in range(0, num_runs):
     acc = np.load(folder_path + "/A_List_" + str(i + 1) + ".npy")
@@ -281,7 +281,7 @@ for i in range(0, num_runs):
         )
     )
 
-for i in range(1, 16, 5):
+for i in range(1, num_runs, 5):
     # plot_euler(100, ground_truths[i], comp_runs[i], "Comp", "Comp vs Ground Truth")
     # plot_euler(100, ground_truths[i], ekf_runs[i], "EKF", "EKF vs Ground Truth")
     plot_euler_both(100, ground_truths[i], ekf_runs[i], comp_runs[i])
