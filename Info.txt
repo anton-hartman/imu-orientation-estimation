@@ -1,0 +1,14 @@
+Sampling rate: 100Hz
+
+A_List: [X, Y, Z]
+G_List: [X, Y, Z]
+M_List: [X, Y, Z]
+
+Units:
+	Acc: g
+	Gyr: dps
+	Mag: Gauss
+
+Calibration:
+	Mag: Use one MC run for calibration
+	Biasses and noise: Use the first stationary part of the MC runs
