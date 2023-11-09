@@ -54,9 +54,53 @@ def plot_euler_both(
 
     for i in range(3):
         time = np.arange(len(ground_truth[:, i])) / fs
-        axs[i].plot(time, ground_truth[:, i], label="Ground Truth")
         axs[i].plot(time, comp[:, i], label="Complementary")
         axs[i].plot(time, ekf[:, i], label="EKF")
+        axs[i].plot(time, ground_truth[:, i], label="Ground Truth")
+        axs[i].set_title(["Roll", "Pitch", "Yaw"][i])
+        axs[i].set_ylabel("Angle [deg]")
+        axs[i].legend()
+
+    axs[2].set_xlabel("Time [s]")
+
+
+import matplotlib as mpl
+
+
+def plot_euler_both_all(
+    fs: int,
+    ground_truth: np.ndarray,
+    ekf: np.ndarray,
+    comp: np.ndarray,
+):
+    fig, axs = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+
+    num_runs = ground_truth.shape[0]
+    colors = mpl.rcParams["axes.prop_cycle"].by_key()["color"][
+        :3
+    ]  # Default first three colors
+
+    for i in range(3):
+        for run in range(num_runs):
+            time = np.arange(len(ground_truth[run, :, i])) / fs
+            axs[i].plot(
+                time,
+                comp[run, :, i],
+                color=colors[0],
+                label="Complementary" if run == 0 else "_nolegend_",
+            )
+            axs[i].plot(
+                time,
+                ekf[run, :, i],
+                color=colors[1],
+                label="EKF" if run == 0 else "_nolegend_",
+            )
+            axs[i].plot(
+                time,
+                ground_truth[run, :, i],
+                color=colors[2],
+                label="Ground Truth" if run == 0 else "_nolegend_",
+            )
         axs[i].set_title(["Roll", "Pitch", "Yaw"][i])
         axs[i].set_ylabel("Angle [deg]")
         axs[i].legend()
@@ -96,28 +140,30 @@ def calculate_rmse(ground_truths, estimates):
 
 def comp_filter(acc, gyr, mag, ground_truth, fs):
     acc *= 9.81
-    mag *= 1000
+    gyr = np.deg2rad(gyr)
+    mag[:, :] = 0.1
     complementary_filter = Complementary(
         gyr=gyr,
         acc=acc,
         mag=mag,
         frequency=fs,
-        gain=0.1,
+        gain=0.05,
     )
 
     comp_filter_estimates = complementary_filter._compute_all()
     comp_euler = np.array(
         [Quaternion(q).to_angles() * 180 / np.pi for q in comp_filter_estimates]
     )
-    comp_euler[:, 0], comp_euler[:, 1] = comp_euler[:, 1], comp_euler[:, 0].copy()
+    comp_euler[:, 0], comp_euler[:, 1] = -comp_euler[:, 1], -comp_euler[:, 0].copy()
     comp_euler[:, 2] *= -1
-    comp_euler[:, 2] += 90
+    comp_euler[:, 2] -= 140
     return comp_euler
 
 
 def ekf(acc, gyr, mag, ground_truth, fs, num_samples):
     acc *= 9.81
-    mag *= 1000
+    gyr = np.deg2rad(gyr)
+    mag *= 100_000
 
     ekf = EKF(frequency=100, frame="NED", magnetic_ref=mag[0])
     Q = np.zeros((num_samples, 4))  # Allocate array for quaternions
@@ -132,72 +178,48 @@ def ekf(acc, gyr, mag, ground_truth, fs, num_samples):
         )
 
     ekf_euler = np.array([Quaternion(q).to_angles() * 180 / np.pi for q in Q])
-    ekf_euler[:, 0], ekf_euler[:, 1] = ekf_euler[:, 1], ekf_euler[:, 0].copy()
+    ekf_euler[:, 0], ekf_euler[:, 1] = -ekf_euler[:, 1], -ekf_euler[:, 0].copy()
     ekf_euler[:, 2] *= -1
 
     return ekf_euler
 
 
-def optimal_test(actual, baseline, research):
+def optimal_test_fixed(actual, baseline, research):
     square_error_baseline = (actual - baseline) ** 2
     squared_error_research = (actual - research) ** 2
+    squared_error_delta = square_error_baseline - squared_error_research
 
-    mse_baseline = np.mean(square_error_baseline, axis=1)
-    mse_research = np.mean(squared_error_research, axis=1)
+    mse_delta = np.mean(squared_error_delta, axis=1)
 
-    delta_mse = mse_baseline - mse_research
-    mu = np.mean(delta_mse, axis=0)
-    std = np.std(delta_mse, axis=0)
+    mu = np.mean(mse_delta, axis=0)
+    std = np.std(mse_delta, axis=0)
     test = mu / std
 
     return mu, std, test
 
 
-def display_optimal_test(intervals, ground_truths, comp_runs, ekf_runs):
+def display_optimal_test_fixed(intervals, ground_truths, comp_runs, ekf_runs):
     results = []
     Fs = 100
+    axes = ["Roll", "Pitch", "Yaw"]
     for interval in intervals:
         true_state = ground_truths[:, interval[0] * Fs : interval[1] * Fs]
         baseline_state = comp_runs[:, interval[0] * Fs : interval[1] * Fs]
         research_state = ekf_runs[:, interval[0] * Fs : interval[1] * Fs]
-        result = optimal_test(true_state, baseline_state, research_state)
+        result = optimal_test_fixed(true_state, baseline_state, research_state)
         results.append(result)
-
-    print("\n____________________________________________")
-    print("Roll")
-    print("--------------------------------------------")
-    data = {
-        "Time Interval": intervals,
-        "Mean": results[0][0],
-        "Std": results[0][1],
-        "Test Stat": results[0][2],
-    }
-    df = pd.DataFrame(data)
-    print(df.to_string(index=False))
-
-    print("\n____________________________________________")
-    print("Pitch")
-    print("--------------------------------------------")
-    data = {
-        "Time Interval": intervals,
-        "Mean": results[1][0],
-        "Std": results[1][1],
-        "Test Stat": results[1][2],
-    }
-    df = pd.DataFrame(data)
-    print(df.to_string(index=False))
-
-    print("\n______________________________________________")
-    print("Yaw")
-    print("----------------------------------------------")
-    data = {
-        "Time Interval": intervals,
-        "Mean": results[2][0],
-        "Std": results[2][1],
-        "Test Stat": results[2][2],
-    }
-    df = pd.DataFrame(data)
-    print(df.to_string(index=False))
+        print("\n--------------------------------------------")
+        print("Time Interval:", interval)
+        print("--------------------------------------------")
+        data = {
+            "Axis": axes,
+            "Mean": result[0],
+            "Std": result[1],
+            "Test Stat": result[2],
+        }
+        df = pd.DataFrame(data)
+        print(df.to_string(index=False))
+        print("--------------------------------------------")
 
 
 def plot_sensor_readings(accs, gyrs, mags, num_runs):
@@ -211,7 +233,7 @@ def plot_sensor_readings(accs, gyrs, mags, num_runs):
         for j in range(num_runs):
             axs[i].plot(t, gyrs[j, :, i])
         axs[i].set_title(["Gyro X", "Gyro Y", "Gyro Z"][i])
-        axs[i].set_ylabel("Angle [rad]")
+        axs[i].set_ylabel("Angle [deg]")
     axs[2].set_xlabel("Time [s]")
     fig.suptitle("Gyroscope Readings")
 
@@ -231,7 +253,7 @@ def plot_sensor_readings(accs, gyrs, mags, num_runs):
         for j in range(num_runs):
             axs[i].plot(t, mags[j, :, i])
         axs[i].set_title(["Mag X", "Mag Y", "Mag Z"][i])
-        axs[i].set_ylabel("Magnetic Field [uT]")
+        axs[i].set_ylabel("Magnetic Field [Gauss]")
     axs[2].set_xlabel("Time [s]")
     fig.suptitle("Magnetometer Readings")
 
@@ -246,8 +268,9 @@ accs = []
 gyrs = []
 mags = []
 
-num_runs = 11
-folder_path = "Collected_Data"
+num_runs = 104
+# folder_path = "Collected_Data"
+folder_path = "Exam_Given_Data"
 for i in range(0, num_runs):
     acc = np.load(folder_path + "/A_List_" + str(i + 1) + ".npy")
     gyr = np.load(folder_path + "/G_List_" + str(i + 1) + ".npy")
@@ -281,16 +304,20 @@ for i in range(0, num_runs):
         )
     )
 
-for i in range(1, num_runs, 5):
+for i in range(0, num_runs, 30):
     # plot_euler(100, ground_truths[i], comp_runs[i], "Comp", "Comp vs Ground Truth")
     # plot_euler(100, ground_truths[i], ekf_runs[i], "EKF", "EKF vs Ground Truth")
     plot_euler_both(100, ground_truths[i], ekf_runs[i], comp_runs[i])
+
+plot_euler_both_all(
+    100, np.array(ground_truths), np.array(ekf_runs), np.array(comp_runs)
+)
 
 accs = np.array(accs)
 gyrs = np.array(gyrs)
 mags = np.array(mags)
 
-plot_sensor_readings(accs, gyrs, mags, num_runs)
+# plot_sensor_readings(accs, gyrs, mags, num_runs)
 filters = np.array([comp_runs, ekf_runs])
 plot_rmse(np.array(ground_truths), filters, 100)
 
@@ -298,8 +325,8 @@ ground_truths = np.array(ground_truths)
 comp_runs = np.array(comp_runs)
 ekf_runs = np.array(ekf_runs)
 
-intervals = [(0, 8), (8, 13), (13, 18)]
-display_optimal_test(intervals, ground_truths, comp_runs, ekf_runs)
+intervals = [(0, 8), (8, 15), (15, 20)]
+display_optimal_test_fixed(intervals, ground_truths, comp_runs, ekf_runs)
 
 plt.show()
 print("Done")
