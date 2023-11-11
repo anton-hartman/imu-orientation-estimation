@@ -401,9 +401,11 @@ def monte_carlo_report_ekf():
 # REMEBER TO CHANGE SEQUENCE IN MONTE CARLO #
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
 
-# print("Dynamic Sequence 1")
-# dyn_seq_1_imu = imuSimulator(sampling_frequency=50)
+print("Dynamic Sequence 1")
+dyn_seq_1_imu = imuSimulator(sampling_frequency=50)
 # dyn_seq_1_imu.dynamic_seq_1()
+dyn_seq_1_imu.exam_seq()
+dyn_seq_1_imu.store_data()
 # plot_comp(dyn_seq_1_imu)
 # plot_ekf(dyn_seq_1_imu)
 # plot_models(dyn_seq_1_imu)

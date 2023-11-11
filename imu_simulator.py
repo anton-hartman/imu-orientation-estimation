@@ -107,7 +107,7 @@ class imuSimulator:
                 self._deg(pitch_rate) + gyro_bias[1],
                 self._deg(yaw_rate) + gyro_bias[2],
             ]
-            G_noise = 0.7 * np.random.normal(0, 1, 3)
+            G_noise = np.random.normal(0, 1, 3)
             new_data = new_data + G_noise
             self.gyroscope_data.append(
                 np.array([self._rad(deg_data) for deg_data in new_data])
@@ -321,6 +321,42 @@ class imuSimulator:
         self._move_to_orientation(-15, -75, 25, 5)
         self._move_to_orientation(15, 75, -25, 5)
         self._move_to_orientation(0, 0, 0, 5)
+
+    def exam_seq(self):
+        self.reset()
+        self._move_to_orientation(roll_deg=0, pitch_deg=0, yaw_deg=0, period_sec=2)
+        self._move_to_orientation(-35, 0, 0, 2)
+        self._move_to_orientation(35, 0, 0, 2)
+        self._move_to_orientation(0, 0, 0, 3)
+        self._move_to_orientation(0, -35, 0, 2)
+        self._move_to_orientation(0, 35, 0, 2)
+        self._move_to_orientation(0, 0, 0, 3)
+        self._move_to_orientation(0, 0, 30, 1)
+        self._move_to_orientation(0, 0, -30, 1)
+        self._move_to_orientation(0, 0, 0, 2)
+
+    def self_seq(self):
+        self.reset()
+        self._move_to_orientation(roll_deg=0, pitch_deg=0, yaw_deg=0, period_sec=2)
+        self._move_to_orientation(0, 0, 0, 2)
+        self._move_to_orientation(0, 35, 0, 2)
+        self._move_to_orientation(0, -35, 0, 2)
+        self._move_to_orientation(0, 0, 0, 3)
+        self._move_to_orientation(-35, 0, 0, 1)
+        self._move_to_orientation(35, 0, 0, 1)
+        self._move_to_orientation(0, 0, 0, 3)
+        self._move_to_orientation(0, 0, 30, 1)
+        self._move_to_orientation(0, 0, -30, 1)
+        self._move_to_orientation(0, 0, 0, 2)
+
+    def store_data(self):
+        folder_path = "imu_sim_data/"
+        np.save(folder_path + "rollList_1", np.array(self.ground_truth_deg)[:, 0])
+        np.save(folder_path + "pitchList_1", np.array(self.ground_truth_deg)[:, 1])
+        np.save(folder_path + "yawList_1", np.array(self.ground_truth_deg)[:, 2])
+        np.save(folder_path + "A_List_1", np.array(self.accelorometer_data))
+        np.save(folder_path + "G_List_1", np.array(self.gyroscope_data))
+        np.save(folder_path + "M_List_1", np.array(self.magnetometer_data))
 
     def plot_imu_data(self):
         """
